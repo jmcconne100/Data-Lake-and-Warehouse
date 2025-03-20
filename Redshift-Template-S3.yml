@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  VPCName:
+    Type: String
+    Default: "RedshiftVPC"
+
+  RedshiftClusterName:
+    Type: String
+    Default: "my-redshift-cluster"
+
+  RedshiftDatabaseName:
+    Type: String
+    Default: "mydatabase"
+
+  RedshiftMasterUsername:
+    Type: String
+    Default: "admin"
+    NoEcho: true
+
+  RedshiftMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 64
+    AllowedPattern: "^[a-zA-Z0-9!@#$%^&*()_+=-]*$"
+    Description: "Redshift master password (must be 8-64 characters, no spaces)"
+
+  NodeType:
+    Type: String
+    Default: "dc2.large"
+
+  NumberOfNodes:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+
+Resources:
+  # S3 Bucket for Redshift Data Storage
+  RedshiftS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${RedshiftClusterName}-s3-bucket"
+      AccessControl: Private
+
+  # IAM Role for Redshift to access S3
+  RedshiftS3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${RedshiftClusterName}-S3AccessRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonRedshiftAllCommandsFullAccess
+      Policies:
+        - PolicyName: S3RedshiftPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:ListBucket"
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource:
+                  - !Sub "arn:aws:s3:::${RedshiftS3Bucket}"
+                  - !Sub "arn:aws:s3:::${RedshiftS3Bucket}/*"
+
+  # IAM Role Attachment to Redshift
+  RedshiftS3AccessRoleAttachment:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${RedshiftClusterName}-S3AccessProfile"
+      Roles:
+        - !Ref RedshiftS3AccessRole
+
+  # VPC for Redshift
+  RedshiftVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref VPCName
+
+  # Internet Gateway
+  RedshiftInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  # Attach Internet Gateway to VPC
+  RedshiftVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref RedshiftVPC
+      InternetGatewayId: !Ref RedshiftInternetGateway
+
+  # Public Subnet in us-west-1a
+  RedshiftPublicSubnet1A:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref RedshiftVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: us-west-1a
+      MapPublicIpOnLaunch: true
+
+  # Public Subnet in us-west-1c
+  RedshiftPublicSubnet1C:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref RedshiftVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: us-west-1c
+      MapPublicIpOnLaunch: true
+
+  # Public Route Table
+  RedshiftPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RedshiftVPC
+
+  # Route to Internet Gateway from Public Subnets
+  RedshiftPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: RedshiftVPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RedshiftPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref RedshiftInternetGateway
+
+  # Associate Route Table with Public Subnets
+  RedshiftPublicSubnetRouteTableAssociation1A:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref RedshiftPublicSubnet1A
+      RouteTableId: !Ref RedshiftPublicRouteTable
+
+  RedshiftPublicSubnetRouteTableAssociation1C:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref RedshiftPublicSubnet1C
+      RouteTableId: !Ref RedshiftPublicRouteTable
+
+  # Security Group for Redshift
+  RedshiftSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Redshift access
+      VpcId: !Ref RedshiftVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5439
+          ToPort: 5439
+          CidrIp: 0.0.0.0/0  # Modify for security
+
+  # Subnet Group for Redshift
+  RedshiftSubnetGroup:
+    Type: AWS::Redshift::ClusterSubnetGroup
+    Properties:
+      Description: "Subnet Group for Redshift Cluster"
+      SubnetIds:
+        - !Ref RedshiftPublicSubnet1A
+        - !Ref RedshiftPublicSubnet1C
+
+  # Secrets Manager for Redshift Credentials
+  RedshiftSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${RedshiftClusterName}-credentials"
+      Description: "Credentials for Redshift Cluster"
+      SecretString:
+        !Sub |
+          {
+            "username": "${RedshiftMasterUsername}",
+            "password": "${RedshiftMasterPassword}"
+          }
+
+  # Redshift Cluster (Updated with IAM Role)
+  RedshiftCluster:
+    Type: AWS::Redshift::Cluster
+    Properties:
+      ClusterIdentifier: !Ref RedshiftClusterName
+      ClusterType: multi-node
+      NodeType: !Ref NodeType
+      NumberOfNodes: !Ref NumberOfNodes
+      MasterUsername: !Sub "{{resolve:secretsmanager:${RedshiftSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RedshiftSecret}:SecretString:password}}"
+      DBName: !Ref RedshiftDatabaseName
+      ClusterSubnetGroupName: !Ref RedshiftSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref RedshiftSecurityGroup
+      PubliclyAccessible: true
+      Encrypted: true
+      IamRoles:
+        - !GetAtt RedshiftS3AccessRole.Arn
+
+Outputs:
+  S3BucketName:
+    Description: "S3 Bucket for Redshift Data Storage"
+    Value: !Ref RedshiftS3Bucket
+  RedshiftIAMRole:
+    Description: "IAM Role for Redshift to access S3"
+    Value: !Ref RedshiftS3AccessRole
+  RedshiftClusterEndpoint:
+    Description: "Redshift Cluster Endpoint"
+    Value: !Sub "${RedshiftCluster.Endpoint.Address}"
