@@ -42,6 +42,24 @@ Resources:
     Properties:
       BucketName: !Sub "${RedshiftClusterName}-s3-bucket"
       AccessControl: Private
+      AccelerateConfiguration:
+        AccelerationStatus: Enabled
+
+  RedshiftS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RedshiftS3Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource: !Sub "arn:aws:s3:::${RedshiftClusterName}-s3-bucket/*"
+            Condition:
+              StringNotEqualsIfExists:
+                s3:x-amz-content-sha256: "UNSIGNED-PAYLOAD"
+              NumericGreaterThan:
+                s3:content-length: 5242880  # 5MB
 
   # IAM Role for Redshift to access S3
   RedshiftS3AccessRole:
@@ -205,9 +223,11 @@ Outputs:
   S3BucketName:
     Description: "S3 Bucket for Redshift Data Storage"
     Value: !Ref RedshiftS3Bucket
+
   RedshiftIAMRole:
     Description: "IAM Role for Redshift to access S3"
     Value: !Ref RedshiftS3AccessRole
+
   RedshiftClusterEndpoint:
     Description: "Redshift Cluster Endpoint"
     Value: !Sub "${RedshiftCluster.Endpoint.Address}"
