@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lakehouse Infrastructure with ECR-based Lambda Containers
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: jon-s3-bucket-for-redshift
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaLakehouseExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaLakehousePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  CreateDimensionsLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: CreateDimensions
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Code:
+        ImageUri: <account-id>.dkr.ecr.<region>.amazonaws.com/lakehouse-lambdas:create-dimensions-latest
+      Timeout: 120
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref BucketName
+
+  GenerateProductsLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: GenerateProducts
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Code:
+        ImageUri: <account-id>.dkr.ecr.<region>.amazonaws.com/lakehouse-lambdas:generate-products-v1
+      Timeout: 120
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref BucketName
+
+  GenerateCustomersLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: GenerateCustomers
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Code:
+        ImageUri: <account-id>.dkr.ecr.<region>.amazonaws.com/lakehouse-lambdas:generate-customers-weekly
+      Timeout: 300
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref BucketName
+
+  GenerateOrdersLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: GenerateOrders
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Code:
+        ImageUri: <account-id>.dkr.ecr.<region>.amazonaws.com/lakehouse-lambdas:generate-orders-weekly
+      Timeout: 300
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref BucketName
+
+  WeeklyStepFunction:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: GenerateFactsStateMachine
+      RoleArn: !GetAtt LambdaExecutionRole.Arn
+      DefinitionString:
+        Fn::Sub: |
+          {
+            "Comment": "Weekly data generation",
+            "StartAt": "GenerateCustomers",
+            "States": {
+              "GenerateCustomers": {
+                "Type": "Task",
+                "Resource": "${GenerateCustomersLambda.Arn}",
+                "Next": "GenerateOrders"
+              },
+              "GenerateOrders": {
+                "Type": "Task",
+                "Resource": "${GenerateOrdersLambda.Arn}",
+                "End": true
+              }
+            }
+          }
+
+  MonthlyEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: MonthlyProductUpdateTrigger
+      ScheduleExpression: cron(0 0 1 * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt GenerateProductsLambda.Arn
+          Id: "GenerateProductsTarget"
+
+  MonthlyPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GenerateProductsLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MonthlyEventRule.Arn
+
+  StepFunctionPermissionCustomers:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GenerateCustomersLambda
+      Action: lambda:InvokeFunction
+      Principal: states.amazonaws.com
+
+  StepFunctionPermissionOrders:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GenerateOrdersLambda
+      Action: lambda:InvokeFunction
+      Principal: states.amazonaws.com
