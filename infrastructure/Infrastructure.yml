@@ -75,7 +75,7 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       PackageType: Image
       Code:
-        ImageUri: 286036002000.dkr.ecr.us-west-1.amazonaws.com/simple-docker-service-06c54edde72f:latest
+        ImageUri: 286036002000.dkr.ecr.us-west-1.amazonaws.com/simple-docker-service-02225da002d3:latest
       Timeout: 300
       Environment:
         Variables:
@@ -184,6 +184,212 @@ Resources:
             Action:
               - states:StartExecution
             Resource: !GetAtt GenerateStepFunction.Arn
+
+  RedshiftLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: RedshiftLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RedshiftLambdaPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow full control of Redshift Serverless resources
+              - Effect: Allow
+                Action:
+                  - redshift-serverless:*
+                Resource: '*'
+              # Allow retrieving the AWS account ID
+              - Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs 
+                  - ec2:DescribeAvailabilityZones
+                Resource: '*'
+
+  BootstrapRedshiftLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: BootstrapRedshift
+      Role: !GetAtt RedshiftLambdaExecutionRole.Arn
+      Runtime: python3.11
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          # Initialize Redshift Serverless and STS clients
+          redshift = boto3.client('redshift-serverless')
+          region = os.environ.get("AWS_REGION", "us-west-1")
+
+          # Define Redshift namespace and workgroup settings
+          NAMESPACE = "lakehouse-ns"
+          WORKGROUP = "lakehouse-wg"
+
+          def handler(event, context):
+              account_id = boto3.client("sts").get_caller_identity()["Account"]
+              IAM_ROLE_ARN = f"arn:aws:iam::{account_id}:role/RedshiftRole"
+
+              # Check if namespace exists; if not, create it
+              try:
+                  redshift.get_namespace(namespaceName=NAMESPACE)
+                  print(f"Namespace {NAMESPACE} already exists.")
+              except redshift.exceptions.ResourceNotFoundException:
+                  redshift.create_namespace(
+                      namespaceName=NAMESPACE,
+                      adminUsername="adminuser",
+                      adminUserPassword="SuperSecure123!"
+                  )
+                  print(f"Namespace {NAMESPACE} created.")
+
+              # Check if workgroup exists; if not, create it
+              try:
+                  redshift.get_workgroup(workgroupName=WORKGROUP)
+                  print(f"Workgroup {WORKGROUP} already exists.")
+              except redshift.exceptions.ResourceNotFoundException:
+                  redshift.create_workgroup(
+                      workgroupName=WORKGROUP,
+                      namespaceName=NAMESPACE,
+                      baseCapacity=32,
+                      publiclyAccessible=True
+                  )
+                  print(f"Workgroup {WORKGROUP} created.")
+
+              return {
+                  "status": "success",
+                  "namespace": NAMESPACE,
+                  "workgroup": WORKGROUP
+              }
+      Timeout: 900
+      Description: "Creates Redshift Serverless namespace and workgroup"
+
+  DeleteRedshiftLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: DeleteRedshiftInfra
+      Role: !GetAtt RedshiftLambdaExecutionRole.Arn
+      Runtime: python3.11
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          import boto3
+          import time
+
+          redshift = boto3.client('redshift-serverless')
+
+          NAMESPACE = "lakehouse-ns"
+          WORKGROUP = "lakehouse-wg"
+
+          def wait_for_workgroup_deletion(workgroup_name, client, retries=10, delay=10):
+              for attempt in range(retries):
+                  try:
+                      client.get_workgroup(workgroupName=workgroup_name)
+                      print(f"Workgroup still exists (attempt {attempt + 1}). Waiting {delay}s...")
+                      time.sleep(delay)
+                  except client.exceptions.ResourceNotFoundException:
+                      print("Workgroup deletion confirmed.")
+                      return
+              raise Exception("Timeout waiting for workgroup to be deleted.")
+
+          def handler(event, context):
+              try:
+                  redshift.delete_workgroup(workgroupName=WORKGROUP)
+                  print(f"Workgroup {WORKGROUP} deletion initiated.")
+                  wait_for_workgroup_deletion(WORKGROUP, redshift)
+              except redshift.exceptions.ResourceNotFoundException:
+                  print(f"Workgroup {WORKGROUP} does not exist.")
+
+              try:
+                  redshift.delete_namespace(namespaceName=NAMESPACE)
+                  print(f"Namespace {NAMESPACE} deleted.")
+              except redshift.exceptions.ResourceNotFoundException:
+                  print(f"Namespace {NAMESPACE} does not exist.")
+
+              return {
+                  "status": "success",
+                  "namespace": NAMESPACE,
+                  "workgroup": WORKGROUP
+              }
+      Timeout: 900
+      Description: "Deletes Redshift Serverless namespace and workgroup"
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GlueJobExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: GlueS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::jon-s3-bucket-for-redshift
+                  - arn:aws:s3:::jon-s3-bucket-for-redshift/*
+                  - arn:aws:s3:::jon-scripts-bucket
+                  - arn:aws:s3:::jon-scripts-bucket/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                Resource: '*'
+
+  RawToParquetGlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: RawToParquetJob
+      Role: !GetAtt GlueJobRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: s3://jon-scripts-bucket/redshifttoparquet.py
+        PythonVersion: 3
+      DefaultArguments:
+        "--job-language": "python"
+        "--TempDir": "s3://jon-s3-bucket-for-redshift/temp/"
+        "--enable-metrics": "true"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-spark-ui": "true"
+      MaxRetries: 1
+      Timeout: 30
+      GlueVersion: 4.0
+      NumberOfWorkers: 2
+      WorkerType: G.1X
 
 Outputs:
   StepFunctionName:
