@@ -34,39 +34,57 @@ aws cloudformation deploy \
 
 Due to limited CloudFormation support for Redshift features like multi-database setup and IAM identity integration, we provision the Redshift cluster manually in the browser.
 
-### Steps to Create the Redshift Cluster
+### Steps to Create the Redshift Serverless Workgroup and Namespace
 
 1. **Open the Redshift service in the AWS Console**  
    Navigate to: https://console.aws.amazon.com/redshift
 
-2. **Click “Create Cluster”**
+2. **Click “Create workgroup”** under **Amazon Redshift Serverless**
 
-3. **Choose “Provisioned”** (not Serverless)
+3. **Namespace Settings**
+   - If prompted, create a new namespace
+   - **Namespace name:** `lakehouse-namespace`
+   - **Database name:** `dev` (this is automatically set, cannot be changed)
+   - Attach an IAM role that includes:
+     - `AmazonS3ReadOnlyAccess`
+     - (Optional) Glue catalog access if querying external tables
+   - Make sure the IAM role is attached to the **namespace** (not just the workgroup)
 
-4. **Cluster Settings**  
-   Fill in the following:
-   - **Cluster identifier:** `my-redshift-cluster`
-   - **Database name:** `dev` (or `mydatabase`, just be consistent)
-   - **Master username:** `redshift_admin`
-   - **Master password:** (Choose something secure; save it)
+4. **Workgroup Settings**
+   - **Workgroup name:** `lakehouse-workgroup`
+   - **Base capacity:** 8 RPU (default is fine for most demos)
+   - **Publicly accessible:** (recommended if you want to use Query Editor v2 without complex VPC setup)
+   - Configure allowed IPs or rely on default public routing for easy access
 
-5. **Node settings**
-   - **Node type:** `dc2.large` (or `ra3.xlplus` if needed)
-   - **Number of nodes:** 1 (single-node for testing)
+5. **Network and Security**
+   - Choose the default VPC unless you need a custom one
+   - No special subnet configuration needed unless going private
 
-6. **Network and Security**
-   - Leave default VPC and Subnet Group
-   - Make sure **public access is enabled** (if you want CLI/BI tool access)
-   - Allow access from your IP or use a security group that enables inbound port **5439**
+6. **Finalize and Create**
+   - Click **Create workgroup**
+   - Wait for the status to become **“Available”** for both the **workgroup** and **namespace**
 
-7. **IAM and Permissions**
-   - Attach an existing IAM role (or create one) with the following policies:
-     - `AmazonS3ReadOnlyAccess` (to allow `COPY` from S3)
-     - Any custom policies your Redshift cluster might need
+7. **Post-Setup (Required!)**
+   - Log out of Root and Log in as redshift-admin
+     ```
+       aws iam create-login-profile \
+       --user-name redshift-admin \
+       --password 'TempStrongP@ssw0rd2025!' \
+       --no-password-reset-required
+     ```
+   - Manually create the Redshift DB user to match your IAM login:
+     ```
+     CREATE USER "IAM:redshift-admin" WITH PASSWORD DISABLE;
+     ```
+   - Grant permissions to the user on the `public` schema:
+     ```
+     GRANT USAGE ON SCHEMA public TO "IAM:redshift-admin";
+     GRANT CREATE, SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "IAM:redshift-admin";
+     ```
 
-8. **Finalize and Create**
-   - Click **Create Cluster**
-   - Wait for the status to become **“Available”**
+---
+
+After this, your Redshift Serverless environment is fully ready for Query Editor v2, COPY commands, and Glue integration.
 
 ---
 
