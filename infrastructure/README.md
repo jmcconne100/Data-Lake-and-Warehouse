@@ -177,7 +177,10 @@ CREATE TABLE orders (
 Load Parquet Files into Redshift Using COPY
 
 Use the Redshift COPY command to load Parquet data from S3:
+
+```
 COPY orders
 FROM 's3://jon-s3-bucket-for-redshift/processed/orders/'
 IAM_ROLE 'arn:aws:iam::<your-account-id>:role/<your-redshift-access-role>'
 FORMAT AS PARQUET;
+```
