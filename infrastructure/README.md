@@ -3,7 +3,7 @@
 This project sets up a simplified modern data lakehouse architecture using AWS services, with a hybrid approach:
 
 - **Infrastructure as Code (IaC)** using CloudFormation for Glue, Lambda, Step Functions, and S3  
-- **Manual provisioning** of Amazon Redshift via the AWS Console for improved control and ease of setup
+- **Manual provisioning** of Amazon Redshift (Provisioned Cluster) via the AWS Console for improved control and ease of setup
 
 ---
 
@@ -29,88 +29,89 @@ aws cloudformation deploy \
   --stack-name LakehouseInfra \
   --capabilities CAPABILITY_NAMED_IAM
 ```
-
 ## Part 2: Create Redshift Cluster Manually (via AWS Console)
 
-Due to limited CloudFormation support for Redshift features like multi-database setup and IAM identity integration, we provision the Redshift cluster manually in the browser.
+Due to limited CloudFormation support for Redshift features like full database configuration and simplified access controls, we provision the Redshift cluster manually through the AWS Console.
 
-### Steps to Create the Redshift Serverless Workgroup and Namespace
+---
+
+### Steps to Create the Redshift Provisioned Cluster
 
 1. **Open the Redshift service in the AWS Console**  
-   Navigate to: https://console.aws.amazon.com/redshift
+   Navigate to: [https://console.aws.amazon.com/redshift](https://console.aws.amazon.com/redshift)
 
-2. **Click “Create workgroup”** under **Amazon Redshift Serverless**
+2. **Click "Create Cluster"**
 
-3. **Namespace Settings**
-   - If prompted, create a new namespace
-   - **Namespace name:** `lakehouse-namespace`
-   - **Database name:** `dev` (this is automatically set, cannot be changed)
-   - Attach an IAM role that includes:
-     - `AmazonS3ReadOnlyAccess`
-     - (Optional) Glue catalog access if querying external tables
-   - Make sure the IAM role is attached to the **namespace** (not just the workgroup)
+3. **Choose "Provisioned"**
 
-4. **Workgroup Settings**
-   - **Workgroup name:** `lakehouse-workgroup`
-   - **Base capacity:** 8 RPU (default is fine for most demos)
-   - **Publicly accessible:** (recommended if you want to use Query Editor v2 without complex VPC setup)
-   - Configure allowed IPs or rely on default public routing for easy access
+4. **Cluster Settings**
+   - **Cluster Identifier:** `my-redshift-cluster`
+   - **Database Name:** `dev`
+   - **Master Username:** `redshift_admin`
+   - **Master Password:** (choose a secure password and store it safely)
 
-5. **Network and Security**
-   - Choose the default VPC unless you need a custom one
-   - No special subnet configuration needed unless going private
+5. **Node Settings**
+   - **Node Type:** `dc2.large` (recommended for cost-efficient demo or small workloads)
+   - **Number of Nodes:** 1 (single-node cluster)
 
-6. **Finalize and Create**
-   - Click **Create workgroup**
-   - Wait for the status to become **“Available”** for both the **workgroup** and **namespace**
+6. **Network and Security**
+   - **Publicly accessible:** Enable this option
+   - Ensure your IP address is allowed through security groups (0.0.0.0/0 if testing, or restrict to your IP)
+   - Use the default VPC unless you have a custom setup.
 
-7. **Post-Setup (Required!)**
-   - Log out of Root and Log in as redshift-admin
-     ```
-       aws iam create-login-profile \
-       --user-name redshift-admin \
-       --password 'TempStrongP@ssw0rd2025!' \
-       --no-password-reset-required
-     ```
-   - Manually create the Redshift DB user to match your IAM login:
-     ```
-     CREATE USER "IAM:redshift-admin" WITH PASSWORD DISABLE;
-     ```
-   - Grant permissions to the user on the `public` schema:
-     ```
-     GRANT USAGE ON SCHEMA public TO "IAM:redshift-admin";
-     GRANT CREATE, SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "IAM:redshift-admin";
-     ```
+7. **IAM and Permissions**
+   - Attach an existing IAM Role or create a new one with:
+     - `AmazonS3ReadOnlyAccess` (for COPY from S3)
+     - (Optional) Glue catalog access permissions if querying external tables
+   - The IAM Role must be attached to the Redshift cluster under "Permissions."
+
+8. **Finalize and Create**
+   - Review settings
+   - Click **Create Cluster**
+   - Wait for the cluster status to become **"Available"**
 
 ---
 
-After this, your Redshift Serverless environment is fully ready for Query Editor v2, COPY commands, and Glue integration.
+### Optional Verification
 
----
-
-### Optional Verification Steps
-
-Once the cluster is available, test the following:
+Once the cluster is available, you can verify it using AWS CLI:
 
 ```
 aws redshift describe-clusters \
   --cluster-identifier my-redshift-cluster \
   --region us-west-1
 ```
+## Part 3: IAM User Setup for Query Editor v2 Access
 
-## Part 3: IAM User for Query Editor v2
+To securely access the Redshift cluster without using the root account, an IAM user named `redshift-admin` is created via CloudFormation.
 
-To access Redshift securely and avoid using the root user, use the IAM user `redshift-admin` created in your CloudFormation stack.
+This user allows you to:
+- Log into the AWS Management Console
+- Access Amazon Redshift via Query Editor v2
+- Run SQL queries without managing static database users manually
 
-This IAM user should be granted the following permissions:
+---
 
-### Required IAM Permissions
+### Required IAM User Setup (redshift-admin)
+
+The `redshift-admin` user should have the following:
+
+- A **Login Profile** (a password) to access the AWS Console
+- An attached **IAM Policy** granting Redshift and Query Editor v2 permissions
+
+---
+
+### IAM Policy Example
 
 ```
+Resources:
   RedshiftAdminUser:
     Type: AWS::IAM::User
     Properties:
       UserName: redshift-admin
+      LoginProfile:
+        Password: TempStrongP@ssw0rd2025!
+        PasswordResetRequired: false
       Policies:
         - PolicyName: QueryEditorV2Support
           PolicyDocument:
@@ -138,23 +139,28 @@ This IAM user should be granted the following permissions:
                   - sqlworkbench:TagResource
                   - sqlworkbench:UntagResource
                   - sqlworkbench:UpdateConnection
-                Resource: "*"
+              Resource: "*"
 ```
+You can set a login profile if needed:
 
-## Part 4: Create Tables & Load Data into Redshift
+## Part 4: Create Tables and Load Data into Redshift
 
-After setting up your Redshift cluster and logging in via Query Editor v2, you can begin creating tables and loading Parquet data from S3 (processed by your Glue jobs).
+After setting up your Redshift cluster and logging in via Query Editor v2, you can create tables and load your processed data stored in S3 into Redshift.
 
 ---
 
 ### Data Locations
 
-Your Parquet data should be located in a structure like:
+The processed Parquet data should be located in the following structure:
+
+s3://jon-s3-bucket-for-redshift/processed/orders/ s3://jon-s3-bucket-for-redshift/processed/customers/ s3://jon-s3-bucket-for-redshift/processed/products/ s3://jon-s3-bucket-for-redshift/processed/dim_segments/ s3://jon-s3-bucket-for-redshift/processed/dim_channels/ s3://jon-s3-bucket-for-redshift/processed/dim_locations/ s3://jon-s3-bucket-for-redshift/processed/dim_categories/
 
 
 ---
 
-### Create Tables (Example)
+### Create Tables in Redshift
+
+Example SQL to create the `orders` table:
 
 ```
 CREATE TABLE orders (
@@ -168,15 +174,10 @@ CREATE TABLE orders (
   status VARCHAR(50)
 );
 ```
-
-### Load Parquet with COPY
+Load Parquet Files into Redshift Using COPY
 
 Use the Redshift COPY command to load Parquet data from S3:
-
-```
+COPY orders
 FROM 's3://jon-s3-bucket-for-redshift/processed/orders/'
 IAM_ROLE 'arn:aws:iam::<your-account-id>:role/<your-redshift-access-role>'
 FORMAT AS PARQUET;
-```
-
-Repeat this for each table (e.g., customers, products, dim_segments, etc.).
