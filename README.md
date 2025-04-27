@@ -6,6 +6,11 @@ This project implements a cloud-native data lakehouse architecture using Amazon 
 
 ### Architecture Components
 
+- ECR container images generated with codepipeline
+  - https://github.com/jmcconne100/lambda-orders
+  - https://github.com/jmcconne100/lambda-customers
+  - https://github.com/jmcconne100/lambda-products
+  - https://github.com/jmcconne100/lambda-dimensions
 - S3 buckets (raw/, processed/)
 - Glue Crawler + Glue Job
 - Lambda functions for generating synthetic data
@@ -14,6 +19,27 @@ This project implements a cloud-native data lakehouse architecture using Amazon 
 - IAM users and roles (redshift-admin)
 
 ## Architecture Overview
+
+Generate the Lambda Container Images
+
+```
+
+           ┌─────────────────────────────┐
+           │       Amazon ECR            │
+           │ (Stores Lambda container    │
+           │  images: orders, customers, │
+           │  products, dimensions)      │
+           └─────────────┬───────────────┘
+                         │
+     ┌───────────────────┼─────────────────────────┐───────────────────┐
+     │                   │                         │                   │
+     ▼                   ▼                         ▼                   ▼
+┌────────────────┐ ┌──────────────────┐    ┌──────────────────┐ ┌────────────────────┐
+│ Lambda: Orders │ │ Lambda: Customers│    │ Lambda: Products │ │ Lambda: Dimensions │
+│ (Container Img)│ │ (Container Img)  │    │ (Container Img)  │ │ (Container Img)    │
+└────────────────┘ └──────────────────┘    └──────────────────┘ └────────────────────┘
+
+```
 
 S3 (raw + processed data) │ ▼ Glue Job (CSV ➝ Parquet) │ ▼ Glue Crawler → Glue Catalog │ ▼ Query + COPY ➝ Amazon Redshift
 
