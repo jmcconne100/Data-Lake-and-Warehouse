@@ -113,37 +113,54 @@ Resources:
         Password: TempStrongP@ssw0rd2025!
         PasswordResetRequired: false
       Policies:
-        - PolicyName: QueryEditorV2Support
+        - PolicyName: RedshiftAdminFullAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - redshift:DescribeClusters
-                  - redshift:GetClusterCredentials
-                  - redshift:ListSchemas
-                  - redshift:ListTables
-                  - redshift:TagResource
-                  - redshift-data:ExecuteStatement
-                  - redshift-data:GetStatementResult
-                  - redshift-data:ListDatabases
-                  - redshift-data:ListSchemas
-                  - redshift-data:ListTables
-                  - sqlworkbench:CreateConnection
-                  - sqlworkbench:DeleteConnection
-                  - sqlworkbench:GetAccountInfo
-                  - sqlworkbench:GetUserInfo
-                  - sqlworkbench:GetAccountSettings
-                  - sqlworkbench:GetUserWorkspaceSettings
-                  - sqlworkbench:ListConnections
-                  - sqlworkbench:TagResource
-                  - sqlworkbench:UntagResource
-                  - sqlworkbench:UpdateConnection
-              Resource: "*"
+                  - redshift:*
+                  - redshift-data:*
+                  - secretsmanager:*
+                  - sqlworkbench:*
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - iam:GetRole
+                  - iam:ListRoles
+                Resource: "*"
 ```
 You can set a login profile if needed:
 
-## Part 4: Create Tables and Load Data into Redshift
+## Part 4: Create Users, Tables and Load Data into Redshift
+
+Run the following commands in the CLI:
+
+# Grant schema usage
+```
+aws redshift-data execute-statement \
+  --cluster-identifier redshift-cluster-1 \
+  --database dev \
+  --db-user awsuser \
+  --sql "GRANT USAGE ON SCHEMA public TO mynewuser;"
+```
+
+# Grant select on all current tables
+```
+aws redshift-data execute-statement \
+  --cluster-identifier redshift-cluster-1 \
+  --database dev \
+  --db-user awsuser \
+  --sql "GRANT SELECT ON ALL TABLES IN SCHEMA public TO mynewuser;"
+```
+
+# Ensure new tables are accessible automatically
+```
+aws redshift-data execute-statement \
+  --cluster-identifier redshift-cluster-1 \
+  --database dev \
+  --db-user awsuser \
+  --sql "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mynewuser;"
+```
 
 After setting up your Redshift cluster and logging in via Query Editor v2, you can create tables and load your processed data stored in S3 into Redshift.
 
