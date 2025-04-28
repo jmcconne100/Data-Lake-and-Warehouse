@@ -164,6 +164,21 @@ aws redshift-data execute-statement \
 
 After setting up your Redshift cluster and logging in via Query Editor v2, you can create tables and load your processed data stored in S3 into Redshift.
 
+### Establish the Connection
+
+Steps:
+- Go to the AWS Console → Amazon Redshift.
+- In the left menu, select Query Editor v2.
+- Click Connect to database.
+- Fill in:
+  - Connection method: Amazon Redshift cluster
+  - Cluster: redshift-cluster-1
+  - Database name: dev
+  - Database user: mynewuser
+  - Password: SuperSecret123
+- (Optional, but recommended) Check Save password if you don’t want to retype it.
+- Click Connect.
+
 ---
 
 ### Data Locations
