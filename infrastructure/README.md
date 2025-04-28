@@ -89,6 +89,7 @@ This user allows you to:
 - Log into the AWS Management Console
 - Access Amazon Redshift via Query Editor v2
 - Run SQL queries without managing static database users manually
+- use secrets manager access
 
 ---
 
@@ -131,53 +132,9 @@ Resources:
 ```
 You can set a login profile if needed:
 
-## Part 4: Create Users, Tables and Load Data into Redshift
-
-Run the following commands in the CLI:
-
-# Grant schema usage
-```
-aws redshift-data execute-statement \
-  --cluster-identifier redshift-cluster-1 \
-  --database dev \
-  --db-user awsuser \
-  --sql "GRANT USAGE ON SCHEMA public TO mynewuser;"
-```
-
-# Grant select on all current tables
-```
-aws redshift-data execute-statement \
-  --cluster-identifier redshift-cluster-1 \
-  --database dev \
-  --db-user awsuser \
-  --sql "GRANT SELECT ON ALL TABLES IN SCHEMA public TO mynewuser;"
-```
-
-# Ensure new tables are accessible automatically
-```
-aws redshift-data execute-statement \
-  --cluster-identifier redshift-cluster-1 \
-  --database dev \
-  --db-user awsuser \
-  --sql "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mynewuser;"
-```
+## Part 4: Create Tables and Load Data into Redshift
 
 After setting up your Redshift cluster and logging in via Query Editor v2, you can create tables and load your processed data stored in S3 into Redshift.
-
-### Establish the Connection
-
-Steps:
-- Go to the AWS Console → Amazon Redshift.
-- In the left menu, select Query Editor v2.
-- Click Connect to database.
-- Fill in:
-  - Connection method: Amazon Redshift cluster
-  - Cluster: redshift-cluster-1
-  - Database name: dev
-  - Database user: mynewuser
-  - Password: SuperSecret123
-- (Optional, but recommended) Check Save password if you don’t want to retype it.
-- Click Connect.
 
 ---
 
@@ -192,18 +149,15 @@ s3://jon-s3-bucket-for-redshift/processed/orders/ s3://jon-s3-bucket-for-redshif
 
 ### Create Tables in Redshift
 
-Example SQL to create the `orders` table:
+You can quickly test the infrastructure connection:
 
 ```
-CREATE TABLE orders (
-  order_id INT,
-  customer_id INT,
-  product_id INT,
-  order_date DATE,
-  quantity INT,
-  unit_price FLOAT8,
-  total_price FLOAT8,
-  status VARCHAR(50)
+CREATE TABLE test_data (
+  id INT,
+  name VARCHAR(255),
+  age INT,
+  city VARCHAR(255),
+  signup_date DATE
 );
 ```
 Load Parquet Files into Redshift Using COPY
@@ -211,8 +165,9 @@ Load Parquet Files into Redshift Using COPY
 Use the Redshift COPY command to load Parquet data from S3:
 
 ```
-COPY orders
-FROM 's3://jon-s3-bucket-for-redshift/processed/orders/'
-IAM_ROLE 'arn:aws:iam::<your-account-id>:role/<your-redshift-access-role>'
-FORMAT AS PARQUET;
+COPY test_data
+FROM 's3://jon-s3-bucket-for-redshift/test.csv'
+IAM_ROLE 'arn:aws:iam::286036002000:role/RedshiftSuperAccessRole'
+FORMAT AS CSV
+IGNOREHEADER 1;
 ```
