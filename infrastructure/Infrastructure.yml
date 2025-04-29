@@ -48,10 +48,24 @@ Resources:
                 Resource: '*'
               - Effect: Allow
                 Action:
-                 - lambda:InvokeFunction
+                  - lambda:InvokeFunction
                 Resource:
                   - arn:aws:lambda:us-west-1:286036002000:function:GenerateCustomers
                   - arn:aws:lambda:us-west-1:286036002000:function:GenerateOrders
+                  - arn:aws:lambda:us-west-1:286036002000:function:CreateDimensions
+                  - arn:aws:lambda:us-west-1:286036002000:function:GenerateProducts
+                  - arn:aws:lambda:us-west-1:286036002000:function:StartGlueCrawlerLambda
+                  - arn:aws:lambda:us-west-1:286036002000:function:StartGlueJobLambda
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                Resource: arn:aws:glue:us-west-1:286036002000:job/RedshiftToParquetJob
+              - Effect: Allow
+                Action:
+                  - glue:StartCrawler
+                Resource: arn:aws:glue:us-west-1:286036002000:crawler/ProcessedDataCrawler
 
   CreateDimensionsLambda:
     Type: AWS::Lambda::Function
@@ -252,6 +266,8 @@ Resources:
       GlueVersion: 4.0
       NumberOfWorkers: 2
       WorkerType: G.1X
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
 
   ProcessedDataCrawler:
     Type: AWS::Glue::Crawler
@@ -279,33 +295,33 @@ Resources:
     Type: AWS::IAM::User
     Properties:
       UserName: redshift-admin
+      LoginProfile:
+        Password: TempStrongP@ssw0rd2025!
+        PasswordResetRequired: false
       Policies:
-        - PolicyName: QueryEditorV2Support
+        - PolicyName: RedshiftAdminFullAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - redshift:DescribeClusters
-                  - redshift:GetClusterCredentials
-                  - redshift:ListSchemas
-                  - redshift:ListTables
-                  - redshift:TagResource
-                  - redshift-data:ExecuteStatement
-                  - redshift-data:GetStatementResult
-                  - redshift-data:ListDatabases
-                  - redshift-data:ListSchemas
-                  - redshift-data:ListTables
-                  - sqlworkbench:CreateConnection
-                  - sqlworkbench:DeleteConnection
-                  - sqlworkbench:GetAccountInfo
-                  - sqlworkbench:GetUserInfo
-                  - sqlworkbench:GetAccountSettings
-                  - sqlworkbench:GetUserWorkspaceSettings
-                  - sqlworkbench:ListConnections
-                  - sqlworkbench:TagResource
-                  - sqlworkbench:UntagResource
-                  - sqlworkbench:UpdateConnection
+                  - redshift:*
+                  - redshift-data:*
+                  - secretsmanager:*
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - iam:GetRole
+                  - iam:ListRoles
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:GetConnection
+                  - glue:GetConnections
+                  - glue:GetCatalogImportStatus
+                  - glue:SearchTables
                 Resource: "*"
 
   RedshiftAdminGroup:
@@ -322,6 +338,154 @@ Resources:
       GroupName: !Ref RedshiftAdminGroup
       Users:
         - !Ref RedshiftAdminUser
+
+  RedshiftSuperAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: RedshiftSuperAccessRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - redshift.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: RedshiftFullAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                  - kms:*
+                  - logs:*
+                  - glue:*
+                  - redshift:*
+                  - redshift-data:*
+                  - secretsmanager:*
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:ListRoles
+                  - ec2:Describe*
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:AttachNetworkInterface
+                  - cloudwatch:*
+                  - sns:Publish
+                  - elasticloadbalancing:Describe*
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupEgress
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                  - rds:CreateDBSnapshot
+                  - rds:CopyDBSnapshot
+                  - rds:DescribeDBSnapshots
+                  - rds:DeleteDBSnapshot
+                Resource: "*"
+
+  InitialSetupStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt LambdaExecutionRole.Arn
+      StateMachineName: InitialLakehouseSetup
+      DefinitionString: !Sub |
+        {
+          "Comment": "Initial Setup: Run Lambdas -> Glue Job -> Crawler",
+          "StartAt": "CreateDimensions",
+          "States": {
+            "CreateDimensions": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${CreateDimensionsLambda}",
+                "Payload": {}
+              },
+              "Next": "GenerateProducts"
+            },
+            "GenerateProducts": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${GenerateProductsLambda}",
+                "Payload": {}
+              },
+              "Next": "GenerateCustomers"
+            },
+            "GenerateCustomers": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${GenerateCustomersLambda}",
+                "Payload": {}
+              },
+              "Next": "GenerateOrders"
+            },
+            "GenerateOrders": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${GenerateOrdersLambda}",
+                "Payload": {}
+              },
+              "Next": "RunGlueJob"
+            },
+            "RunGlueJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${RedshiftToParquetGlueJob}"
+              },
+              "Next": "RunGlueCrawler"
+            },
+            "RunGlueCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StartGlueCrawlerLambda}",
+                "Payload": {}
+              },
+              "End": true
+            }
+          }
+        }
+      DefinitionSubstitutions:
+        CreateDimensionsLambda: !GetAtt CreateDimensionsLambda.Arn
+        GenerateProductsLambda: !GetAtt GenerateProductsLambda.Arn
+        GenerateCustomersLambda: !GetAtt GenerateCustomersLambda.Arn
+        GenerateOrdersLambda: !GetAtt GenerateOrdersLambda.Arn
+        RedshiftToParquetGlueJob: !Ref RedshiftToParquetGlueJob
+        StartGlueCrawlerLambda: !GetAtt StartGlueCrawlerLambda.Arn
+
+
+  StartGlueCrawlerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: StartGlueCrawlerLambda
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          def lambda_handler(event, context):
+              crawler_name = os.environ.get('CRAWLER_NAME')
+              glue = boto3.client('glue')
+              response = glue.start_crawler(Name=crawler_name)
+              return {"status": "started", "crawler_name": crawler_name}
+      Timeout: 60
+      Environment:
+        Variables:
+          CRAWLER_NAME: !Ref ProcessedDataCrawler
+
 
 Outputs:
   StepFunctionName:
