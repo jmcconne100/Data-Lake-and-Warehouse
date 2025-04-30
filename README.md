@@ -87,10 +87,5 @@ S3 (raw + processed data) │ ▼ Glue Job (CSV ➝ Parquet) │ ▼ Glue Crawle
            ┌────────────────────────────┐
            │    Amazon Redshift         │
            │ (Provisioned Cluster)      │
-           └────────┬───────────────────┘
-                    ▼
-       ┌──────────────────────────────┐
-       │ COPY FROM s3://.../processed/│
-       │    FORMAT AS PARQUET         │
-       └──────────────────────────────┘
+           └────────────────────────────┘
 ```
