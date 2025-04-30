@@ -1,5 +1,0 @@
-CREATE EXTERNAL SCHEMA IF NOT EXISTS s3_ext_schema
-FROM DATA CATALOG
-DATABASE 'lakehouse_glue_db'
-IAM_ROLE 'arn:aws:iam::<your-account-id>:role/RedshiftRole'
-CREATE EXTERNAL DATABASE IF NOT EXISTS;
